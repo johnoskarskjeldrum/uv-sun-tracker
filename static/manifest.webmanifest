@@ -1,0 +1,13 @@
+{
+  "name": "Sol-tracker",
+  "short_name": "Sol-tracker",
+  "description": "Adaptiv UV-dose-tracker som lærer din soltoleranse over tid.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

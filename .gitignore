@@ -1,0 +1,4 @@
+.venv/
+soldata.db
+__pycache__/
+*.pyc
