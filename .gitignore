@@ -2,3 +2,6 @@
 soldata.db
 __pycache__/
 *.pyc
+
+# Deploy-konfig (SSH-detaljer, aldri i git)
+scripts/deploy.env
