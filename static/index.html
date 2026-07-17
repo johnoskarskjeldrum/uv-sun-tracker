@@ -68,11 +68,26 @@
             <option value="thick">Tykt lag</option>
           </select>
         </label>
+        <label>Værforhold
+          <select id="cloud">
+            <option value="clear">☀️ Full sol</option>
+            <option value="partly">⛅ Noe skyer</option>
+            <option value="overcast">☁️ Overskyet</option>
+          </select>
+        </label>
+        <label>Kroppsside
+          <select id="body_side">
+            <option value="both">Begge sider</option>
+            <option value="front">Forside</option>
+            <option value="back">Bakside</option>
+          </select>
+        </label>
       </div>
 
       <div id="timer-display" class="timer hidden">00:00:00</div>
 
       <button id="toggle-timer" class="btn primary big">▶ Start soling</button>
+      <button id="manual-add" class="btn">＋ Legg til økt manuelt</button>
 
       <h2 class="section-title">Historikk</h2>
       <div id="history" class="history"></div>
@@ -97,6 +112,49 @@
     </section>
   </div>
 
+  <!-- Manuell økt-dialog -->
+  <div id="manual-modal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Legg til økt manuelt</h2>
+      <div class="form-grid">
+        <label>Starttid <input id="m-start" type="datetime-local" /></label>
+        <label>Sluttid <input id="m-end" type="datetime-local" /></label>
+        <label>UV-indeks <input id="m-uv" type="number" step="0.1" min="0" placeholder="f.eks. 5" /></label>
+        <label>Solkrem (SPF)
+          <select id="m-spf">
+            <option value="1">Ingen</option>
+            <option value="15">SPF 15</option>
+            <option value="30">SPF 30</option>
+            <option value="50">SPF 50</option>
+          </select>
+        </label>
+        <label>Påføring
+          <select id="m-thickness">
+            <option value="none">Ingen krem</option>
+            <option value="thin">Tynt lag</option>
+            <option value="thick">Tykt lag</option>
+          </select>
+        </label>
+        <label>Værforhold
+          <select id="m-cloud">
+            <option value="clear">☀️ Full sol</option>
+            <option value="partly">⛅ Noe skyer</option>
+            <option value="overcast">☁️ Overskyet</option>
+          </select>
+        </label>
+        <label>Kroppsside
+          <select id="m-body_side">
+            <option value="both">Begge sider</option>
+            <option value="front">Forside</option>
+            <option value="back">Bakside</option>
+          </select>
+        </label>
+      </div>
+      <button id="manual-save" class="btn primary">Lagre økt</button>
+      <button id="manual-cancel" class="btn ghost">Avbryt</button>
+    </div>
+  </div>
+
   <!-- Feedback-dialog -->
   <div id="feedback-modal" class="modal hidden">
     <div class="modal-box">
@@ -107,6 +165,13 @@
         <button class="fb-btn yellow" data-fb="yellow">🟡 Litt rosa / øm</button>
         <button class="fb-btn red" data-fb="red">🔴 Solbrent</button>
       </div>
+      <div id="burn-section" class="hidden">
+        <label class="field-label">Hvor ble du brent?</label>
+        <div id="burn-chips" class="chips"></div>
+      </div>
+      <label class="field-label">Kommentar (valgfritt)</label>
+      <textarea id="feedback-comment" rows="2" placeholder="f.eks. glemte å smøre skuldrene"></textarea>
+      <button id="feedback-send" class="btn primary hidden">Send</button>
       <button id="feedback-later" class="btn ghost">Senere</button>
     </div>
   </div>

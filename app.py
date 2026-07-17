@@ -34,6 +34,13 @@ ALPHA = 0.3
 # Nedre grense slik at MED_cal aldri kollapser til 0.
 MED_FLOOR = 0.5
 
+# Skydekke demper UV-straalingen. Faktor som ganges inn i dosen.
+CLOUD_FACTOR = {
+    "clear": 1.0,      # Full sol
+    "partly": 0.7,     # Noe skyer
+    "overcast": 0.4,   # Helt overskyet
+}
+
 # Standard start-MED (SED) per Fitzpatrick-hudtype.
 FITZPATRICK_MED = {
     1: 2.0,   # Type I  - alltid solbrent, aldri brun
@@ -76,22 +83,42 @@ def init_db() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_time      TEXT NOT NULL,
-                end_time        TEXT NOT NULL,
-                uv_index        REAL NOT NULL,
-                spf             INTEGER NOT NULL,
-                thickness       TEXT NOT NULL,   -- none | thin | thick
-                calculated_dose REAL NOT NULL,
-                feedback        TEXT,            -- green | yellow | red  (NULL = ubesvart)
-                feedback_time   TEXT,
-                created_at      TEXT NOT NULL
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_time       TEXT NOT NULL,
+                end_time         TEXT NOT NULL,
+                uv_index         REAL NOT NULL,
+                spf              INTEGER NOT NULL,
+                thickness        TEXT NOT NULL,   -- none | thin | thick
+                cloud            TEXT NOT NULL DEFAULT 'clear',   -- clear | partly | overcast
+                body_side        TEXT NOT NULL DEFAULT 'both',    -- front | back | both
+                calculated_dose  REAL NOT NULL,
+                feedback         TEXT,            -- green | yellow | red  (NULL = ubesvart)
+                feedback_time    TEXT,
+                feedback_comment TEXT,
+                burn_location    TEXT,
+                created_at       TEXT NOT NULL
             );
             """
         )
 
 
+def migrate() -> None:
+    """Legg til nye kolonner paa eksisterende databaser (f.eks. paa Pi-en)."""
+    with db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+        alters = {
+            "cloud": "ALTER TABLE sessions ADD COLUMN cloud TEXT NOT NULL DEFAULT 'clear'",
+            "body_side": "ALTER TABLE sessions ADD COLUMN body_side TEXT NOT NULL DEFAULT 'both'",
+            "feedback_comment": "ALTER TABLE sessions ADD COLUMN feedback_comment TEXT",
+            "burn_location": "ALTER TABLE sessions ADD COLUMN burn_location TEXT",
+        }
+        for col, sql in alters.items():
+            if col not in cols:
+                conn.execute(sql)
+
+
 init_db()
+migrate()
 
 
 def now_iso() -> str:
@@ -117,10 +144,12 @@ def effective_spf(spf: int, thickness: str) -> float:
     return float(spf)  # thick
 
 
-def compute_dose(start: datetime, end: datetime, uv_index: float, spf: int, thickness: str) -> float:
-    """Dose (SED) = UV-indeks * (minutter/60) * 0.9 / effektiv_SPF."""
+def compute_dose(start: datetime, end: datetime, uv_index: float, spf: int,
+                 thickness: str, cloud: str = "clear") -> float:
+    """Dose (SED) = UV-indeks * (minutter/60) * 0.9 * skyfaktor / effektiv_SPF."""
     minutes = max(0.0, (end - start).total_seconds() / 60.0)
-    return uv_index * (minutes / 60.0) * 0.9 / effective_spf(spf, thickness)
+    cloud_factor = CLOUD_FACTOR.get(cloud, 1.0)
+    return uv_index * (minutes / 60.0) * 0.9 * cloud_factor / effective_spf(spf, thickness)
 
 
 def apply_learning(med_cal: float, dose: float, feedback: str) -> float:
@@ -154,12 +183,16 @@ class SessionIn(BaseModel):
     end_time: str
     uv_index: float = Field(ge=0)
     spf: int = Field(ge=1, default=1)
-    thickness: str = Field(default="none")  # none | thin | thick
+    thickness: str = Field(default="none")     # none | thin | thick
+    cloud: str = Field(default="clear")        # clear | partly | overcast
+    body_side: str = Field(default="both")     # front | back | both
 
 
 class FeedbackIn(BaseModel):
     session_id: int
     feedback: str  # green | yellow | red
+    comment: str | None = None
+    burn_location: str | None = None
 
 
 # --------------------------------------------------------------------------
@@ -235,14 +268,15 @@ def create_session(data: SessionIn):
     end = parse_iso(data.end_time)
     if end < start:
         raise HTTPException(status_code=400, detail="Sluttid er foer starttid.")
-    dose = round(compute_dose(start, end, data.uv_index, data.spf, data.thickness), 3)
+    dose = round(compute_dose(start, end, data.uv_index, data.spf, data.thickness, data.cloud), 3)
     with db() as conn:
         cur = conn.execute(
             """INSERT INTO sessions
-               (start_time, end_time, uv_index, spf, thickness, calculated_dose, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (start_time, end_time, uv_index, spf, thickness, cloud, body_side,
+                calculated_dose, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (data.start_time, data.end_time, data.uv_index, data.spf,
-             data.thickness, dose, now_iso()),
+             data.thickness, data.cloud, data.body_side, dose, now_iso()),
         )
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (cur.lastrowid,)).fetchone()
     return dict(row)
@@ -293,8 +327,10 @@ def submit_feedback(data: FeedbackIn):
             conn.execute("UPDATE profile SET med_cal = ? WHERE id = 1", (new_med,))
 
         conn.execute(
-            "UPDATE sessions SET feedback = ?, feedback_time = ? WHERE id = ?",
-            (data.feedback, now_iso(), data.session_id),
+            """UPDATE sessions
+               SET feedback = ?, feedback_time = ?, feedback_comment = ?, burn_location = ?
+               WHERE id = ?""",
+            (data.feedback, now_iso(), data.comment, data.burn_location, data.session_id),
         )
     return {"old_med_cal": old_med, "new_med_cal": new_med, "delta": round(new_med - old_med, 3)}
 

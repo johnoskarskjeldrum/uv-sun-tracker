@@ -10,18 +10,24 @@ Hostes på en Raspberry Pi og brukes som installerbar PWA på mobilen.
 
 - **Live UV-indeks** hentet fra [Open-Meteo](https://open-meteo.com/) (gratis, ingen API-nøkkel) basert på posisjon.
 - **Solingstimer** med sanntids dose-akkumulering (SED), fargekodet mot din tålegrense.
+- **Robust mot mobilnettleseren**: aktiv økt lagres i `localStorage` og gjenopprettes hvis fanen kastes; Screen Wake Lock holder skjermen våken under soling.
 - **Solkrem-logikk** med realistisk «tynt/tykt lag» — tynt lag halverer effektiv SPF.
+- **Værforhold** (full sol / noe skyer / overskyet) demper dosen med en skyfaktor.
+- **Kroppsside** (forside / bakside / begge) logges for hver økt.
+- **Manuell registrering** av økter i etterkant med egne start- og sluttider.
 - **Lærende algoritme** som justerer `MED_cal` opp/ned etter hud-feedback.
-- **Forsinket feedback**: appen ber om tilbakemelding om huden først ~8 timer etter en økt (rødhet kommer 4–24t etter soling).
+- **Forsinket feedback**: appen ber om tilbakemelding om huden først ~8 timer etter en økt (rødhet kommer 4–24t etter soling), med kommentar og hvor du ble brent.
 - **PWA**: installerbar på hjemskjermen, fungerer offline for app-skallet.
 
 ## Doseformel
 
 ```
-Dose (SED) = UV-indeks × (minutter / 60) × 0.9 / effektiv_SPF
+Dose (SED) = UV-indeks × (minutter / 60) × 0.9 × skyfaktor / effektiv_SPF
 ```
 
 Effektiv SPF: `ingen krem` = 1, `tynt lag` = SPF/2, `tykt lag` = full SPF.
+Skyfaktor: `full sol` = 1.0, `noe skyer` = 0.7, `overskyet` = 0.4.
+Kroppsside logges som metadata (påvirker ikke dosen — huden på en gitt flate får samme dose uansett).
 
 ## Læringsalgoritme
 
@@ -83,7 +89,11 @@ et selvsignert sertifikat, eller [Tailscale](https://tailscale.com/) med MagicDN
 Alt lagres i SQLite (`soldata.db`) på Pi-en:
 
 - **profile** — Fitzpatrick-hudtype, start-MED, kalibrert MED, hjemmeposisjon.
-- **sessions** — hver økt: start/slutt, UV, SPF, påføring, beregnet dose, feedback.
+- **sessions** — hver økt: start/slutt, UV, SPF, påføring, værforhold, kroppsside, beregnet dose,
+  feedback, feedback-kommentar og brannsted.
+
+Nye kolonner legges automatisk til på eksisterende databaser ved oppstart (`migrate()`),
+så du kan oppdatere Pi-en uten å miste tidligere økter.
 
 ## API
 
