@@ -86,20 +86,35 @@ def init_db() -> None:
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 start_time       TEXT NOT NULL,
                 end_time         TEXT NOT NULL,
+                local_date       TEXT,            -- lokal kalenderdato YYYY-MM-DD
                 uv_index         REAL NOT NULL,
                 spf              INTEGER NOT NULL,
                 thickness        TEXT NOT NULL,   -- none | thin | thick
                 cloud            TEXT NOT NULL DEFAULT 'clear',   -- clear | partly | overcast
                 body_side        TEXT NOT NULL DEFAULT 'both',    -- front | back | both
                 calculated_dose  REAL NOT NULL,
-                feedback         TEXT,            -- green | yellow | red  (NULL = ubesvart)
+                feedback         TEXT,            -- (utfaset: feedback ligger naa paa dag-nivaa)
                 feedback_time    TEXT,
                 feedback_comment TEXT,
                 burn_location    TEXT,
                 created_at       TEXT NOT NULL
             );
+
+            -- Feedback og laering skjer paa dag-nivaa: solbrenthet skyldes
+            -- dagens SAMLEDE dose, ikke en enkelt oekt.
+            CREATE TABLE IF NOT EXISTS days (
+                date             TEXT PRIMARY KEY,   -- lokal kalenderdato YYYY-MM-DD
+                feedback         TEXT,               -- green | yellow | red
+                feedback_time    TEXT,
+                feedback_comment TEXT,
+                burn_location    TEXT,
+                learned          INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
+
+
+SEVERITY = {"green": 1, "yellow": 2, "red": 3}
 
 
 def migrate() -> None:
@@ -111,10 +126,49 @@ def migrate() -> None:
             "body_side": "ALTER TABLE sessions ADD COLUMN body_side TEXT NOT NULL DEFAULT 'both'",
             "feedback_comment": "ALTER TABLE sessions ADD COLUMN feedback_comment TEXT",
             "burn_location": "ALTER TABLE sessions ADD COLUMN burn_location TEXT",
+            "local_date": "ALTER TABLE sessions ADD COLUMN local_date TEXT",
         }
         for col, sql in alters.items():
             if col not in cols:
                 conn.execute(sql)
+
+        # Backfill lokal dato for gamle oekter (best effort: UTC-dato fra starttid).
+        conn.execute(
+            "UPDATE sessions SET local_date = substr(start_time, 1, 10) WHERE local_date IS NULL"
+        )
+
+        # Migrer eksisterende oekt-feedback opp til dag-nivaa (kun for dager som
+        # ikke allerede har et dag-innslag). Laering ble alt brukt per oekt, saa
+        # vi markerer disse dagene som 'learned' for aa unngaa dobbel justering.
+        rows = conn.execute(
+            """SELECT local_date, feedback, feedback_time, feedback_comment, burn_location
+               FROM sessions WHERE feedback IS NOT NULL ORDER BY feedback_time"""
+        ).fetchall()
+        by_date: dict[str, dict] = {}
+        for r in rows:
+            d = by_date.setdefault(r["local_date"], {
+                "feedback": None, "feedback_time": r["feedback_time"],
+                "comments": [], "burns": [],
+            })
+            # Behold den mest alvorlige tilbakemeldingen for dagen.
+            if d["feedback"] is None or SEVERITY[r["feedback"]] > SEVERITY[d["feedback"]]:
+                d["feedback"] = r["feedback"]
+            d["feedback_time"] = r["feedback_time"] or d["feedback_time"]
+            if r["feedback_comment"]:
+                d["comments"].append(r["feedback_comment"])
+            if r["burn_location"]:
+                d["burns"].append(r["burn_location"])
+        for date, d in by_date.items():
+            exists = conn.execute("SELECT 1 FROM days WHERE date = ?", (date,)).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                """INSERT INTO days (date, feedback, feedback_time, feedback_comment, burn_location, learned)
+                   VALUES (?, ?, ?, ?, ?, 1)""",
+                (date, d["feedback"], d["feedback_time"],
+                 "; ".join(d["comments"]) or None,
+                 ", ".join(sorted(set(", ".join(d["burns"]).split(", ")))) if d["burns"] else None),
+            )
 
 
 init_db()
@@ -181,6 +235,7 @@ class ProfileIn(BaseModel):
 class SessionIn(BaseModel):
     start_time: str
     end_time: str
+    local_date: str | None = None              # lokal dato YYYY-MM-DD (settes av frontend)
     uv_index: float = Field(ge=0)
     spf: int = Field(ge=1, default=1)
     thickness: str = Field(default="none")     # none | thin | thick
@@ -189,7 +244,7 @@ class SessionIn(BaseModel):
 
 
 class FeedbackIn(BaseModel):
-    session_id: int
+    date: str  # lokal kalenderdato YYYY-MM-DD
     feedback: str  # green | yellow | red
     comment: str | None = None
     burn_location: str | None = None
@@ -269,13 +324,14 @@ def create_session(data: SessionIn):
     if end < start:
         raise HTTPException(status_code=400, detail="Sluttid er foer starttid.")
     dose = round(compute_dose(start, end, data.uv_index, data.spf, data.thickness, data.cloud), 3)
+    local_date = data.local_date or data.start_time[:10]
     with db() as conn:
         cur = conn.execute(
             """INSERT INTO sessions
-               (start_time, end_time, uv_index, spf, thickness, cloud, body_side,
+               (start_time, end_time, local_date, uv_index, spf, thickness, cloud, body_side,
                 calculated_dose, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (data.start_time, data.end_time, data.uv_index, data.spf,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (data.start_time, data.end_time, local_date, data.uv_index, data.spf,
              data.thickness, data.cloud, data.body_side, dose, now_iso()),
         )
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -290,15 +346,16 @@ def update_session(session_id: int, data: SessionIn):
     if end < start:
         raise HTTPException(status_code=400, detail="Sluttid er foer starttid.")
     dose = round(compute_dose(start, end, data.uv_index, data.spf, data.thickness, data.cloud), 3)
+    local_date = data.local_date or data.start_time[:10]
     with db() as conn:
         if not conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Fant ikke oekten.")
         conn.execute(
             """UPDATE sessions
-               SET start_time=?, end_time=?, uv_index=?, spf=?, thickness=?,
+               SET start_time=?, end_time=?, local_date=?, uv_index=?, spf=?, thickness=?,
                    cloud=?, body_side=?, calculated_dose=?
                WHERE id=?""",
-            (data.start_time, data.end_time, data.uv_index, data.spf, data.thickness,
+            (data.start_time, data.end_time, local_date, data.uv_index, data.spf, data.thickness,
              data.cloud, data.body_side, dose, session_id),
         )
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
@@ -321,64 +378,107 @@ def list_sessions():
     return [dict(r) for r in rows]
 
 
+def _days_query(conn):
+    """Aggreger oekter til dager, med dagssum og dag-feedback + oektene under."""
+    sessions = conn.execute("SELECT * FROM sessions ORDER BY start_time DESC").fetchall()
+    day_rows = {r["date"]: dict(r) for r in conn.execute("SELECT * FROM days").fetchall()}
+    days: dict[str, dict] = {}
+    for s in sessions:
+        date = s["local_date"] or s["start_time"][:10]
+        day = days.setdefault(date, {
+            "date": date, "total_dose": 0.0, "sessions": [],
+            "feedback": None, "feedback_time": None,
+            "feedback_comment": None, "burn_location": None, "last_end": None,
+        })
+        day["total_dose"] = round(day["total_dose"] + s["calculated_dose"], 3)
+        day["sessions"].append(dict(s))
+        if day["last_end"] is None or s["end_time"] > day["last_end"]:
+            day["last_end"] = s["end_time"]
+    for date, day in days.items():
+        if date in day_rows:
+            fb = day_rows[date]
+            day["feedback"] = fb["feedback"]
+            day["feedback_time"] = fb["feedback_time"]
+            day["feedback_comment"] = fb["feedback_comment"]
+            day["burn_location"] = fb["burn_location"]
+    return sorted(days.values(), key=lambda d: d["date"], reverse=True)
+
+
+@app.get("/api/days")
+def list_days():
+    with db() as conn:
+        return _days_query(conn)
+
+
 @app.get("/api/pending-feedback")
 def pending_feedback():
-    """Oekter uten feedback der det har gaatt lenge nok til at rodhet ville vist seg."""
+    """Dager uten feedback der det har gaatt lenge nok til at rodhet ville vist seg."""
     now = datetime.now(timezone.utc)
     with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM sessions WHERE feedback IS NULL ORDER BY start_time DESC"
-        ).fetchall()
+        days = _days_query(conn)
     due = []
-    for r in rows:
-        hours = (now - parse_iso(r["end_time"])).total_seconds() / 3600.0
+    for day in days:
+        if day["feedback"] is not None or not day["last_end"]:
+            continue
+        hours = (now - parse_iso(day["last_end"])).total_seconds() / 3600.0
         if hours >= FEEDBACK_DELAY_HOURS:
-            due.append(dict(r))
+            due.append({"date": day["date"], "total_dose": day["total_dose"]})
     return due
 
 
 @app.post("/api/feedback")
 def submit_feedback(data: FeedbackIn):
+    """Feedback for en hel dag. Laeringen bruker dagens SAMLEDE dose."""
     if data.feedback not in ("green", "yellow", "red"):
         raise HTTPException(status_code=400, detail="Ugyldig feedback-verdi.")
     with db() as conn:
-        session = conn.execute(
-            "SELECT * FROM sessions WHERE id = ?", (data.session_id,)
-        ).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Fant ikke oekten.")
         profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
         if not profile:
             raise HTTPException(status_code=400, detail="Ingen profil er satt opp.")
+        total = conn.execute(
+            "SELECT COALESCE(SUM(calculated_dose), 0) AS d FROM sessions WHERE local_date = ?",
+            (data.date,),
+        ).fetchone()["d"]
 
+        existing = conn.execute("SELECT * FROM days WHERE date = ?", (data.date,)).fetchone()
         old_med = profile["med_cal"]
-        # Bare laer av oekter som ikke allerede er besvart (unngaa dobbel-justering).
         new_med = old_med
-        if session["feedback"] is None:
-            new_med = apply_learning(old_med, session["calculated_dose"], data.feedback)
+        # Laer bare én gang per dag (unngaa dobbel-justering).
+        if not existing or existing["learned"] == 0:
+            new_med = apply_learning(old_med, round(total, 3), data.feedback)
             conn.execute("UPDATE profile SET med_cal = ? WHERE id = 1", (new_med,))
 
-        conn.execute(
-            """UPDATE sessions
-               SET feedback = ?, feedback_time = ?, feedback_comment = ?, burn_location = ?
-               WHERE id = ?""",
-            (data.feedback, now_iso(), data.comment, data.burn_location, data.session_id),
-        )
-    return {"old_med_cal": old_med, "new_med_cal": new_med, "delta": round(new_med - old_med, 3)}
+        if existing:
+            conn.execute(
+                """UPDATE days SET feedback=?, feedback_time=?, feedback_comment=?,
+                       burn_location=?, learned=1 WHERE date=?""",
+                (data.feedback, now_iso(), data.comment, data.burn_location, data.date),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO days (date, feedback, feedback_time, feedback_comment, burn_location, learned)
+                   VALUES (?, ?, ?, ?, ?, 1)""",
+                (data.date, data.feedback, now_iso(), data.comment, data.burn_location),
+            )
+    return {"old_med_cal": old_med, "new_med_cal": new_med, "delta": round(new_med - old_med, 3),
+            "total_dose": round(total, 3)}
 
 
 # --------------------------------------------------------------------------
 # Dagens status
 # --------------------------------------------------------------------------
 @app.get("/api/today")
-def today_status():
-    """Sum av dagens doser + prosent av kalibrert taalegrense."""
-    today = datetime.now(timezone.utc).date().isoformat()
+def today_status(date: str | None = None):
+    """Sum av dagens doser + prosent av kalibrert taalegrense.
+
+    `date` er brukerens lokale dato (YYYY-MM-DD); faller tilbake til UTC-dato.
+    """
+    day = date or datetime.now(timezone.utc).date().isoformat()
     with db() as conn:
         profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
         rows = conn.execute(
-            "SELECT calculated_dose, start_time FROM sessions WHERE start_time >= ?",
-            (today,),
+            "SELECT calculated_dose FROM sessions WHERE local_date = ?",
+            (day,),
         ).fetchall()
     dose_today = round(sum(r["calculated_dose"] for r in rows), 3)
     med_cal = profile["med_cal"] if profile else None

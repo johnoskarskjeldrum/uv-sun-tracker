@@ -79,6 +79,26 @@ function toLocalInput(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Lokal kalenderdato (YYYY-MM-DD) — brukes til å gruppere økter per dag.
+function localDateStr(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function fmtDay(dateStr) {
+  const today = localDateStr(new Date());
+  const y = new Date();
+  y.setDate(y.getDate() - 1);
+  if (dateStr === today) return "I dag";
+  if (dateStr === localDateStr(y)) return "I går";
+  return new Date(dateStr + "T12:00:00").toLocaleDateString("no",
+    { weekday: "short", day: "numeric", month: "short" });
+}
+
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString("no", { hour: "2-digit", minute: "2-digit" });
+}
+
 // Samme doseformel som backend, for sanntidsvisning mens timeren går.
 function effectiveSpf(spf, thickness) {
   if (thickness === "none" || spf <= 1) return 1;
@@ -187,7 +207,7 @@ async function refreshHome() {
 }
 
 async function refreshDose() {
-  const t = await api("/api/today");
+  const t = await api("/api/today?date=" + localDateStr(new Date()));
   updateDosePanel(t.dose_today, t.med_cal);
 }
 
@@ -201,41 +221,54 @@ function updateDosePanel(dose, medCal) {
 }
 
 async function refreshHistory() {
-  const sessions = await api("/api/sessions");
+  const days = await api("/api/days");
   state.sessionsById = {};
   const box = $("#history");
   box.innerHTML = "";
-  if (!sessions.length) {
+  if (!days.length) {
     box.innerHTML = `<p class="hint">Ingen økter ennå. Trykk «Start soling» for å begynne.</p>`;
     return;
   }
-  sessions.slice(0, 30).forEach((s) => {
-    state.sessionsById[s.id] = s;
-    const dot = s.feedback ? `<div class="hist-dot dot-${s.feedback}"></div>` : "";
-    const fbBtn = s.feedback ? "" :
-      `<button class="hist-fb-btn" data-sid="${s.id}" data-dose="${s.calculated_dose}">Gi feedback</button>`;
-    const meta = [CLOUD_LABEL[s.cloud], SIDE_LABEL[s.body_side]].filter(Boolean).join(" · ");
+  days.forEach((day) => {
+    // Dag-overskrift med samlet dose og dag-feedback.
+    const dot = day.feedback ? `<div class="hist-dot dot-${day.feedback}"></div>` : "";
+    const fbBtn = day.feedback ? "" :
+      `<button class="hist-fb-btn" data-date="${day.date}" data-dose="${day.total_dose}">Gi feedback</button>`;
     const noteParts = [];
-    if (s.burn_location) noteParts.push(`Brent: ${esc(s.burn_location)}`);
-    if (s.feedback_comment) noteParts.push(`«${esc(s.feedback_comment)}»`);
+    if (day.burn_location) noteParts.push(`Brent: ${esc(day.burn_location)}`);
+    if (day.feedback_comment) noteParts.push(`«${esc(day.feedback_comment)}»`);
     const note = noteParts.length ? `<div class="hist-note">${noteParts.join(" — ")}</div>` : "";
-    const el = document.createElement("div");
-    el.className = "hist-item";
-    el.innerHTML = `
-      <div class="hist-main" style="flex:1">
-        <b>${s.calculated_dose.toFixed(2)} SED</b>
-        <div class="hist-sub">${fmtDate(s.start_time)} · UV ${s.uv_index.toFixed(1)}${s.spf > 1 ? " · SPF " + s.spf : ""}</div>
-        <div class="hist-meta">${meta}</div>
+    const header = document.createElement("div");
+    header.className = "day-header";
+    header.innerHTML = `
+      <div style="flex:1">
+        <b>${fmtDay(day.date)}</b>
+        <div class="hist-sub">${day.total_dose.toFixed(2)} SED totalt · ${day.sessions.length} økt(er)</div>
         ${note}
       </div>
-      <div class="hist-actions">
-        ${dot || fbBtn}
-        <button class="hist-edit" data-sid="${s.id}" title="Rediger">✎</button>
-      </div>`;
-    box.appendChild(el);
+      <div class="hist-actions">${dot || fbBtn}</div>`;
+    box.appendChild(header);
+
+    // Enkeltøktene under dagen (fortsatt redigerbare).
+    day.sessions.forEach((s) => {
+      state.sessionsById[s.id] = s;
+      const meta = [CLOUD_LABEL[s.cloud], SIDE_LABEL[s.body_side]].filter(Boolean).join(" · ");
+      const el = document.createElement("div");
+      el.className = "hist-item session-item";
+      el.innerHTML = `
+        <div class="hist-main" style="flex:1">
+          <b>${s.calculated_dose.toFixed(2)} SED</b>
+          <div class="hist-sub">${fmtTime(s.start_time)}–${fmtTime(s.end_time)} · UV ${s.uv_index.toFixed(1)}${s.spf > 1 ? " · SPF " + s.spf : ""}</div>
+          <div class="hist-meta">${meta}</div>
+        </div>
+        <div class="hist-actions">
+          <button class="hist-edit" data-sid="${s.id}" title="Rediger">✎</button>
+        </div>`;
+      box.appendChild(el);
+    });
   });
   box.querySelectorAll(".hist-fb-btn").forEach((b) => {
-    b.onclick = () => openFeedback(Number(b.dataset.sid), Number(b.dataset.dose));
+    b.onclick = () => openFeedback(b.dataset.date, Number(b.dataset.dose));
   });
   box.querySelectorAll(".hist-edit").forEach((b) => {
     b.onclick = () => openEdit(state.sessionsById[Number(b.dataset.sid)]);
@@ -273,7 +306,7 @@ function tick() {
 
 async function startTimer() {
   await loadUv();
-  const t = await api("/api/today");
+  const t = await api("/api/today?date=" + localDateStr(new Date()));
   state._baseDose = t.dose_today;
   state.running = true;
   state.startTime = Date.now();
@@ -305,6 +338,7 @@ async function stopTimer() {
     body: JSON.stringify({
       start_time: startTime.toISOString(),
       end_time: endTime.toISOString(),
+      local_date: localDateStr(startTime),
       uv_index: state.uv || 0,
       spf: Number($("#spf").value),
       thickness: $("#thickness").value,
@@ -395,6 +429,7 @@ async function saveManual() {
   const body = JSON.stringify({
     start_time: start.toISOString(),
     end_time: end.toISOString(),
+    local_date: localDateStr(start),
     uv_index: Number($("#m-uv").value),
     spf: Number($("#m-spf").value),
     thickness: $("#m-thickness").value,
@@ -439,11 +474,11 @@ function renderBurnChips() {
   });
 }
 
-function openFeedback(sessionId, dose) {
-  feedbackTarget = sessionId;
+function openFeedback(date, dose) {
+  feedbackTarget = date;
   state.selectedFeedback = null;
   $("#feedback-context").textContent =
-    `Denne økten ga en estimert dose på ${dose.toFixed(2)} SED. Svaret ditt hjelper appen å lære din faktiske toleranse.`;
+    `${fmtDay(date)} fikk du en estimert total dose på ${dose.toFixed(2)} SED. Svaret ditt hjelper appen å lære din faktiske toleranse.`;
   $("#feedback-comment").value = "";
   renderBurnChips();
   $("#burn-section").classList.add("hidden");
@@ -477,7 +512,7 @@ async function sendFeedback() {
   const res = await api("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
-      session_id: feedbackTarget,
+      date: feedbackTarget,
       feedback: state.selectedFeedback,
       comment,
       burn_location: burn,
@@ -499,8 +534,8 @@ async function checkPendingFeedback() {
   const banner = $("#feedback-banner");
   if (pending.length) {
     banner.classList.remove("hidden");
-    banner.textContent = `☀️ Du har ${pending.length} økt(er) som venter på hud-feedback. Trykk her.`;
-    banner.onclick = () => openFeedback(pending[0].id, pending[0].calculated_dose);
+    banner.textContent = `☀️ Du har ${pending.length} dag(er) som venter på hud-feedback. Trykk her.`;
+    banner.onclick = () => openFeedback(pending[0].date, pending[0].total_dose);
   } else {
     banner.classList.add("hidden");
   }

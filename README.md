@@ -14,9 +14,10 @@ Hostes på en Raspberry Pi og brukes som installerbar PWA på mobilen.
 - **Solkrem-logikk** med realistisk «tynt/tykt lag» — tynt lag halverer effektiv SPF.
 - **Værforhold** (full sol / noe skyer / overskyet) demper dosen med en skyfaktor.
 - **Kroppsside** (forside / bakside / begge) logges for hver økt.
-- **Manuell registrering** av økter i etterkant med egne start- og sluttider.
-- **Lærende algoritme** som justerer `MED_cal` opp/ned etter hud-feedback.
-- **Forsinket feedback**: appen ber om tilbakemelding om huden først ~8 timer etter en økt (rødhet kommer 4–24t etter soling), med kommentar og hvor du ble brent.
+- **Manuell registrering** og **redigering/sletting** av økter i etterkant med egne start- og sluttider.
+- **Daglige doser**: økter grupperes per lokal kalenderdag, og feedback + læring skjer per dag (solbrenthet skyldes dagens samlede eksponering, ikke én enkelt økt).
+- **Lærende algoritme** som justerer `MED_cal` opp/ned etter hud-feedback på dagens totale dose.
+- **Forsinket feedback**: appen ber om tilbakemelding om huden først ~8 timer etter dagens siste økt (rødhet kommer 4–24t etter soling), med kommentar og hvor du ble brent.
 - **PWA**: installerbar på hjemskjermen, fungerer offline for app-skallet.
 
 ## Doseformel
@@ -31,11 +32,15 @@ Kroppsside logges som metadata (påvirker ikke dosen — huden på en gitt flate
 
 ## Læringsalgoritme
 
+Læringen bruker **dagens samlede dose** (`dose` = sum av alle øktene den dagen):
+
 | Feedback | Betingelse | Justering av `MED_cal` |
 |----------|-----------|------------------------|
 | 🔴 Solbrent | dose < grense | `grense − (grense − dose) × 0.3` (ned) |
 | 🟡 Litt rosa | dose < grense | `grense − (grense − dose) × 0.15` (forsiktig ned) |
 | 🟢 Helt fin | dose > grense | `grense + 0.2` (forsiktig opp) |
+
+Hver dag lærer appen bare én gang (`days.learned`), så gjentatt feedback justerer ikke grensen flere ganger.
 
 ## Kjøre lokalt
 
@@ -89,11 +94,13 @@ et selvsignert sertifikat, eller [Tailscale](https://tailscale.com/) med MagicDN
 Alt lagres i SQLite (`soldata.db`) på Pi-en:
 
 - **profile** — Fitzpatrick-hudtype, start-MED, kalibrert MED, hjemmeposisjon.
-- **sessions** — hver økt: start/slutt, UV, SPF, påføring, værforhold, kroppsside, beregnet dose,
-  feedback, feedback-kommentar og brannsted.
+- **sessions** — hver økt: start/slutt, lokal dato, UV, SPF, påføring, værforhold, kroppsside,
+  beregnet dose.
+- **days** — én rad per lokal kalenderdag: feedback, feedback-kommentar, brannsted og
+  om læringen alt er brukt (`learned`).
 
-Nye kolonner legges automatisk til på eksisterende databaser ved oppstart (`migrate()`),
-så du kan oppdatere Pi-en uten å miste tidligere økter.
+Nye kolonner/tabeller legges automatisk til på eksisterende databaser ved oppstart (`migrate()`),
+og gammel per-økt-feedback konverteres til dag-feedback — så du kan oppdatere Pi-en uten å miste data.
 
 ## API
 
@@ -103,10 +110,13 @@ så du kan oppdatere Pi-en uten å miste tidligere økter.
 | POST | `/api/profile` | Opprett/oppdater profil |
 | GET | `/api/uv?lat=&lon=` | Live UV-indeks |
 | POST | `/api/session` | Lagre en solingsøkt |
-| GET | `/api/sessions` | Alle økter |
-| GET | `/api/pending-feedback` | Økter som venter på feedback |
-| POST | `/api/feedback` | Send feedback (trigger læring) |
-| GET | `/api/today` | Dagens akkumulerte dose |
+| PUT | `/api/session/{id}` | Rediger en økt (rekalkulerer dose) |
+| DELETE | `/api/session/{id}` | Slett en økt |
+| GET | `/api/sessions` | Alle økter (flat liste) |
+| GET | `/api/days` | Økter gruppert per dag, med dagssum og dag-feedback |
+| GET | `/api/pending-feedback` | Dager som venter på feedback |
+| POST | `/api/feedback` | Send dag-feedback (trigger læring på dagssum) |
+| GET | `/api/today?date=` | Akkumulert dose for en lokal dato |
 
 ## Ansvarsfraskrivelse
 
