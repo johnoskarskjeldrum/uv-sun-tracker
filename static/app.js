@@ -202,6 +202,7 @@ function updateDosePanel(dose, medCal) {
 
 async function refreshHistory() {
   const sessions = await api("/api/sessions");
+  state.sessionsById = {};
   const box = $("#history");
   box.innerHTML = "";
   if (!sessions.length) {
@@ -209,6 +210,7 @@ async function refreshHistory() {
     return;
   }
   sessions.slice(0, 30).forEach((s) => {
+    state.sessionsById[s.id] = s;
     const dot = s.feedback ? `<div class="hist-dot dot-${s.feedback}"></div>` : "";
     const fbBtn = s.feedback ? "" :
       `<button class="hist-fb-btn" data-sid="${s.id}" data-dose="${s.calculated_dose}">Gi feedback</button>`;
@@ -226,11 +228,17 @@ async function refreshHistory() {
         <div class="hist-meta">${meta}</div>
         ${note}
       </div>
-      ${dot || fbBtn}`;
+      <div class="hist-actions">
+        ${dot || fbBtn}
+        <button class="hist-edit" data-sid="${s.id}" title="Rediger">✎</button>
+      </div>`;
     box.appendChild(el);
   });
   box.querySelectorAll(".hist-fb-btn").forEach((b) => {
     b.onclick = () => openFeedback(Number(b.dataset.sid), Number(b.dataset.dose));
+  });
+  box.querySelectorAll(".hist-edit").forEach((b) => {
+    b.onclick = () => openEdit(state.sessionsById[Number(b.dataset.sid)]);
   });
 }
 
@@ -335,16 +343,46 @@ function restoreActiveSession() {
 // ---------------------------------------------------------------------------
 // Manuell økt
 // ---------------------------------------------------------------------------
-function openManual() {
-  const now = new Date();
-  const start = new Date(now.getTime() - 30 * 60000); // 30 min siden som utgangspunkt
+let editingId = null;
+
+function fillManualForm({ start, end, uv, spf, thickness, cloud, bodySide }) {
   $("#m-start").value = toLocalInput(start);
-  $("#m-end").value = toLocalInput(now);
-  $("#m-uv").value = state.uv != null ? state.uv.toFixed(1) : "";
-  $("#m-spf").value = "1";
-  $("#m-thickness").value = "none";
-  $("#m-cloud").value = "clear";
-  $("#m-body_side").value = "both";
+  $("#m-end").value = toLocalInput(end);
+  $("#m-uv").value = uv != null ? uv : "";
+  $("#m-spf").value = spf;
+  $("#m-thickness").value = thickness;
+  $("#m-cloud").value = cloud;
+  $("#m-body_side").value = bodySide;
+}
+
+function openManual() {
+  editingId = null;
+  const now = new Date();
+  fillManualForm({
+    start: new Date(now.getTime() - 30 * 60000), // 30 min siden som utgangspunkt
+    end: now,
+    uv: state.uv != null ? state.uv.toFixed(1) : "",
+    spf: "1", thickness: "none", cloud: "clear", bodySide: "both",
+  });
+  $("#manual-title").textContent = "Legg til økt manuelt";
+  $("#manual-delete").classList.add("hidden");
+  $("#manual-modal").classList.remove("hidden");
+}
+
+function openEdit(s) {
+  if (!s) return;
+  editingId = s.id;
+  fillManualForm({
+    start: new Date(s.start_time),
+    end: new Date(s.end_time),
+    uv: s.uv_index,
+    spf: String(s.spf),
+    thickness: s.thickness,
+    cloud: s.cloud,
+    bodySide: s.body_side,
+  });
+  $("#manual-title").textContent = "Rediger økt";
+  $("#manual-delete").classList.remove("hidden");
   $("#manual-modal").classList.remove("hidden");
 }
 
@@ -354,20 +392,33 @@ async function saveManual() {
   if ($("#m-uv").value === "") return toast("Fyll inn UV-indeks.");
   const start = new Date(s), end = new Date(e);
   if (end < start) return toast("Sluttid er før starttid.");
-  await api("/api/session", {
-    method: "POST",
-    body: JSON.stringify({
-      start_time: start.toISOString(),
-      end_time: end.toISOString(),
-      uv_index: Number($("#m-uv").value),
-      spf: Number($("#m-spf").value),
-      thickness: $("#m-thickness").value,
-      cloud: $("#m-cloud").value,
-      body_side: $("#m-body_side").value,
-    }),
+  const body = JSON.stringify({
+    start_time: start.toISOString(),
+    end_time: end.toISOString(),
+    uv_index: Number($("#m-uv").value),
+    spf: Number($("#m-spf").value),
+    thickness: $("#m-thickness").value,
+    cloud: $("#m-cloud").value,
+    body_side: $("#m-body_side").value,
   });
+  if (editingId) {
+    await api(`/api/session/${editingId}`, { method: "PUT", body });
+  } else {
+    await api("/api/session", { method: "POST", body });
+  }
   $("#manual-modal").classList.add("hidden");
-  toast("Økt lagt til.");
+  toast(editingId ? "Økt oppdatert." : "Økt lagt til.");
+  editingId = null;
+  await refreshHome();
+}
+
+async function deleteSession() {
+  if (!editingId) return;
+  if (!confirm("Slette denne økten? Dette kan ikke angres.")) return;
+  await api(`/api/session/${editingId}`, { method: "DELETE" });
+  $("#manual-modal").classList.add("hidden");
+  toast("Økt slettet.");
+  editingId = null;
   await refreshHome();
 }
 
@@ -499,10 +550,11 @@ async function init() {
   // Timer
   $("#toggle-timer").onclick = () => (state.running ? stopTimer() : startTimer());
 
-  // Manuell økt
+  // Manuell økt / redigering
   $("#manual-add").onclick = openManual;
   $("#manual-save").onclick = saveManual;
-  $("#manual-cancel").onclick = () => $("#manual-modal").classList.add("hidden");
+  $("#manual-delete").onclick = deleteSession;
+  $("#manual-cancel").onclick = () => { editingId = null; $("#manual-modal").classList.add("hidden"); };
 
   // Innstillinger
   $("#settings-btn").onclick = openSettings;

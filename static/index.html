@@ -115,7 +115,7 @@
   <!-- Manuell økt-dialog -->
   <div id="manual-modal" class="modal hidden">
     <div class="modal-box">
-      <h2>Legg til økt manuelt</h2>
+      <h2 id="manual-title">Legg til økt manuelt</h2>
       <div class="form-grid">
         <label>Starttid <input id="m-start" type="datetime-local" /></label>
         <label>Sluttid <input id="m-end" type="datetime-local" /></label>
@@ -151,6 +151,7 @@
         </label>
       </div>
       <button id="manual-save" class="btn primary">Lagre økt</button>
+      <button id="manual-delete" class="btn danger hidden">Slett økt</button>
       <button id="manual-cancel" class="btn ghost">Avbryt</button>
     </div>
   </div>

@@ -76,6 +76,7 @@ select, input {
 .btn.primary.big { font-size: 1.15rem; padding: 18px; }
 .btn.primary.running { background: linear-gradient(90deg, #ff5252, #d32f2f); color: #fff; }
 .btn.ghost { background: none; border: none; color: var(--muted); }
+.btn.danger { background: rgba(255,59,48,.15); color: var(--red); border-color: rgba(255,59,48,.3); }
 .btn:disabled { opacity: .5; }
 
 /* Fitzpatrick-liste */
@@ -97,6 +98,8 @@ select, input {
 .hist-dot { width: 14px; height: 14px; border-radius: 50%; }
 .dot-green { background: var(--green); } .dot-yellow { background: var(--yellow); } .dot-red { background: var(--red); }
 .hist-fb-btn { background: rgba(255,255,255,.08); border: none; color: var(--muted); border-radius: 8px; padding: 6px 10px; font-size: .8rem; cursor: pointer; }
+.hist-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.hist-edit { background: rgba(255,255,255,.08); border: none; color: var(--muted); border-radius: 8px; width: 32px; height: 32px; font-size: .9rem; cursor: pointer; }
 
 /* Banner */
 .banner { background: linear-gradient(90deg, var(--accent), var(--accent2)); color: #201400; border-radius: 12px; padding: 14px; margin-bottom: 16px; font-weight: 600; cursor: pointer; }

@@ -282,6 +282,38 @@ def create_session(data: SessionIn):
     return dict(row)
 
 
+@app.put("/api/session/{session_id}")
+def update_session(session_id: int, data: SessionIn):
+    """Rediger en tidligere oekt (f.eks. rette sluttid hvis du glemte aa stoppe)."""
+    start = parse_iso(data.start_time)
+    end = parse_iso(data.end_time)
+    if end < start:
+        raise HTTPException(status_code=400, detail="Sluttid er foer starttid.")
+    dose = round(compute_dose(start, end, data.uv_index, data.spf, data.thickness, data.cloud), 3)
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Fant ikke oekten.")
+        conn.execute(
+            """UPDATE sessions
+               SET start_time=?, end_time=?, uv_index=?, spf=?, thickness=?,
+                   cloud=?, body_side=?, calculated_dose=?
+               WHERE id=?""",
+            (data.start_time, data.end_time, data.uv_index, data.spf, data.thickness,
+             data.cloud, data.body_side, dose, session_id),
+        )
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    return dict(row)
+
+
+@app.delete("/api/session/{session_id}")
+def delete_session(session_id: int):
+    with db() as conn:
+        cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Fant ikke oekten.")
+    return {"deleted": session_id}
+
+
 @app.get("/api/sessions")
 def list_sessions():
     with db() as conn:
